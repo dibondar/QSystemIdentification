@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.linalg import logm, hankel, svd, lstsq
+from scipy.integrate import odeint
 from collections import namedtuple
 
 def estimate_rank(orig_responces, alpha, print_sigma=True):
@@ -21,12 +22,12 @@ def estimate_rank(orig_responces, alpha, print_sigma=True):
         print("Estimated rank ", rank)
         print(Sigma1)
 
-    return rank
+    return rank, Sigma1
 
 # return type for the following function
 Reconstructed = namedtuple('Reconstructed', ['Ac', 'C', 'Nc', 'x0'])
 
-def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v):
+def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v, rank:int=None):
     """
     Perform the bilinear system identification from a series of SINGLE valued outputs
     and SINGLE control (i.e., m=1 and r=1)
@@ -35,6 +36,8 @@ def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v):
     :param alpha: (int) the shape of the Hankel matrix
     :param dt: (float) time increment
     :param v: (list) the control values used to generate orig_responces
+
+    :param rank: (int) rank to be used
 
     :return: Reconstructed
     """
@@ -47,15 +50,15 @@ def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v):
     # declare parameters
     m = 1  # number of outputs
     r = 1  # number of controls
-    p = orig_responces.shape[0]  # number of measurments
+    p = orig_responces.shape[0]  # number of measurements
 
 
     Y1 = orig_responces[0]
 
     U1, Sigma1, V1_T = svd(hankel(Y1[1:(alpha + 1)], Y1[alpha:]), full_matrices=False)
 
-    # estimate the rank
-    rank = np.argmin(np.abs(Sigma1 / Sigma1.max() - 1e-3))
+    # estimate the rank if it is not given
+    rank = rank if rank else np.argmin(np.abs(Sigma1 / Sigma1.max() - 1e-3))
 
     C_reconstructed = U1[:m, :rank]
 
@@ -118,3 +121,57 @@ def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v):
         Nc = Nc_reconstructed,
         x0 = x0_reconstructed,
     )
+
+def get_response(model:Reconstructed, E, times:np.ndarray):
+    """
+    Calculate the response from the pulse E. We assume SINGLE valued outputs and SINGLE control (i.e., m=1 and r=1).
+    :param model: the model represented by the data type of Reconstructed
+    :param E: the real functions of time representing the filed
+    :param times: (np.array) the time integration
+    :return: np.array
+    """
+    x = odeint(
+        lambda x, t, Ac, Nc, E: (Ac + Nc * E(t)) @ x,
+        model.x0.reshape(-1),
+        times,
+        args=(model.Ac, model.Nc[0], E)
+    )
+
+    return x @ model.C[0]
+
+def get_training_responses(model:Reconstructed, times:np.ndarray, p:int, u:float):
+    """
+    Recover responses that were used as input to reconstruct the model.
+    We assume SINGLE valued outputs and SINGLE control (i.e., m=1 and r=1).
+    :param model: the model represented by the data type of Reconstructed
+    :param times: (np.array) the time integration
+    :param p: (int) maximum number of time steps to keep the field on
+    :param u: (float) the on value for the field
+    :return: np.ndarray
+    """
+
+    # save responses
+    responses = []
+
+    for n in range(2, p + 2):
+        # the response is "on"
+        x_on = odeint(
+            lambda x, t, Ac, Nc, u: (Ac + Nc * u) @ x,
+            model.x0.reshape(-1),
+            times[:n],
+            args=(model.Ac, model.Nc[0], u)
+        )
+        
+        # the response is "off"
+        x_off = odeint(
+            lambda x, t, Ac: Ac @ x,
+            x_on[-1],
+            times[(n - 1):],
+            args=(model.Ac,)
+        )[1:]
+
+        responses.append(
+            np.vstack([x_on, x_off]) @ model.C[0]
+        )
+
+    return np.array(responses)
