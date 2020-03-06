@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.linalg import logm, hankel, svd, lstsq
-from scipy.integrate import odeint
+from scipy.integrate import ode
 from collections import namedtuple
 
 def estimate_rank(orig_responces, alpha, print_sigma=True):
@@ -130,14 +130,22 @@ def get_response(model:Reconstructed, E, times:np.ndarray):
     :param times: (np.array) the time integration
     :return: np.array
     """
-    x = odeint(
-        lambda x, t, Ac, Nc, E: (Ac + Nc * E(t)) @ x,
-        model.x0.reshape(-1),
-        times,
-        args=(model.Ac, model.Nc[0], E)
-    )
 
-    return x @ model.C[0]
+    # decide on the kind of integrator needed
+    integrator_kind = 'zvode' if any(_.dtype == np.complex for _ in (model.x0, model.Ac, model.Nc[0])) else 'vode'
+
+    solver = ode(
+        lambda t, x, Ac, Nc, E: (Ac + Nc * E(t)) @ x
+    ).set_integrator(integrator_kind)
+
+    solver.set_initial_value(model.x0.reshape(-1), times[0]).set_f_params(model.Ac, model.Nc[0], E)
+
+    # save the trajectory
+    x = [solver.y]
+    x.extend(
+        solver.integrate(t) for t in times[1:]
+    )
+    return np.array(x) @ model.C[0]
 
 def get_training_responses(model:Reconstructed, times:np.ndarray, p:int, u:float):
     """
@@ -153,25 +161,53 @@ def get_training_responses(model:Reconstructed, times:np.ndarray, p:int, u:float
     # save responses
     responses = []
 
+    # decide on the kind of integrator needed
+    integrator_kind = 'zvode' if any(_.dtype == np.complex for _ in (model.x0, model.Ac, model.Nc[0])) else 'vode'
+
     for n in range(2, p + 2):
-        # the response is "on"
-        x_on = odeint(
-            lambda x, t, Ac, Nc, u: (Ac + Nc * u) @ x,
-            model.x0.reshape(-1),
-            times[:n],
-            args=(model.Ac, model.Nc[0], u)
+
+        ################################################################################################################
+        #
+        # the input is "on"
+        #
+        ################################################################################################################
+
+        solver = ode(
+            lambda t, x, Ac, Nc, u: (Ac + Nc * u) @ x
+        ).set_integrator(integrator_kind)
+
+        solver.set_initial_value(model.x0.reshape(-1), times[0]).set_f_params(model.Ac, model.Nc[0], u)
+
+        # save the trajectory
+        x = [solver.y]
+        x.extend(
+            solver.integrate(t) for t in times[1:n]
         )
-        
-        # the response is "off"
-        x_off = odeint(
-            lambda x, t, Ac: Ac @ x,
-            x_on[-1],
-            times[(n - 1):],
-            args=(model.Ac,)
-        )[1:]
+
+        ################################################################################################################
+        #
+        # the input is "off"
+        #
+        ################################################################################################################
+
+        solver = ode(
+            lambda t, x, Ac: Ac @ x
+        ).set_integrator(integrator_kind)
+
+        solver.set_initial_value(x[-1], times[n - 1]).set_f_params(model.Ac)
+
+        x.extend(
+            solver.integrate(t) for t in times[n:]
+        )
+
+        ################################################################################################################
+        #
+        # calculate the output
+        #
+        ################################################################################################################
 
         responses.append(
-            np.vstack([x_on, x_off]) @ model.C[0]
+            np.array(x) @ model.C[0]
         )
 
     return np.array(responses)
