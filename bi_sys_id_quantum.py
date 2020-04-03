@@ -1,20 +1,46 @@
 import numpy as np
-from scipy.linalg import logm, hankel, svd, lstsq, pinv, orthogonal_procrustes
+from scipy.linalg import logm, svd, lstsq, pinv, orthogonal_procrustes
 from scipy.integrate import ode
 from collections import namedtuple
 
+def block_hankel(first_column, last_row):
+    """
+    Form block Hankel matrix from first_column and last_row.
+
+    last_row[0] is ignored; the last row of the returned matrix is [first_column[-1], last_row[1:]].
+    """
+    blocks = [[]]
+
+    # fillup with the first_column values
+    for entry in first_column:
+        for row in blocks:
+            row.append(entry)
+        blocks.append([])
+
+    blocks.pop()
+
+    # fillup with the last_row values
+    lower_triangle = blocks[1:]
+
+    for entry in last_row[1:]:
+        for row in lower_triangle:
+            row.append(entry)
+        lower_triangle = lower_triangle[1:]
+
+    return np.block(blocks)
+
 def estimate_rank(orig_responces, alpha, print_sigma=True):
     """
-    Estimate the rank based on a series of SINGLE valued outputs and SINGLE control (i.e., m=1 and r=1)
+    Estimate the rank based on a series of $m$-dimensional outputs under $r$ control
     :param orig_responces: numpy.array of dimension (r, number of time steps).
     :param alpha: (int) the shape of the Hankel matrix
     :param print_sigma: boolean flag indicating whether to print the singular values
 
     :return: (int) indicating rank
     """
-    Y1 = orig_responces[0]
+    Y1 = orig_responces[0].T
 
-    _, Sigma1, _ = svd(hankel(Y1[1:(alpha + 1)], Y1[alpha:]), full_matrices=False)
+    _, Sigma1, _ = svd(block_hankel(Y1[1:(alpha + 1)], Y1[alpha:]), full_matrices=False)
 
     rank = np.argmin(np.abs(Sigma1 / Sigma1.max() - 1e-3))
 
@@ -29,8 +55,8 @@ Reconstructed = namedtuple('Reconstructed', ['Ac', 'C', 'Nc', 'x0'])
 
 def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v, rank:int=None):
     """
-    Perform the bilinear system identification from a series of SINGLE valued outputs
-    and SINGLE control (i.e., m=1 and r=1)
+    Perform the bilinear system identification from a series of $m$-dimensional outputs
+    under $r$ control
 
     :param orig_responces: numpy.array of dimension (r, number of time steps).
     :param alpha: (int) the shape of the Hankel matrix
@@ -48,13 +74,14 @@ def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v, rank
     ####################################################################################################################
 
     # declare parameters
-    m = 1  # number of outputs
-    r = 1  # number of controls
     p = orig_responces.shape[0]  # number of measurements
+    r = len(v)  # number of controls
+    assert r == orig_responces.shape[1], "number of controls does not coincide"
+    m = orig_responces.shape[2]  # number of outputs
 
-    Y1 = orig_responces[0]
+    Y1 = orig_responces[0].T
 
-    U1, Sigma1, V1_T = svd(hankel(Y1[1:(alpha + 1)], Y1[alpha:]), full_matrices=False)
+    U1, Sigma1, V1_T = svd(block_hankel(Y1[1:(alpha + 1)], Y1[alpha:]), full_matrices=False)
 
     sqrt_sigma1 = np.sqrt(Sigma1)
 
@@ -71,7 +98,7 @@ def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v, rank
     U1_down = U1[m:, ]
 
     Ac_reconstructed = (logm(
-        #orthogonal_procrustes(U1_up, U1_down)[0][:rank, :rank]
+        # orthogonal_procrustes(U1_up, U1_down)[0][:rank, :rank]
         lstsq(U1_up, U1_down)[0][:rank, :rank]
     ) / dt)
 
@@ -82,6 +109,7 @@ def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v, rank
 
     # truncate the rank of matrix
     U1 = U1[:, :rank]
+
     ####################################################################################################################
     #
     # Identify Nc[i] and the initial condition x0
@@ -91,7 +119,7 @@ def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v, rank
     pinv_U1 = pinv(U1)
 
     B_bar.extend(
-        pinv_U1 @ orig_responces[k - 1, k:(k + alpha)][..., None] for k in range(2, p + 1)
+        pinv_U1 @ orig_responces[k - 1].T.reshape(-1, r)[(m * k):(m * k + m * alpha)] for k in range(2, p + 1)
     )
 
     C = [
@@ -154,12 +182,13 @@ def get_response(model:Reconstructed, E, times:np.ndarray):
     x.extend(
         solver.integrate(t) for t in times[1:]
     )
-    return np.array(x) @ model.C[0]
+    #return np.array(x) @ model.C[0]
+    return model.C @ np.array(x).T
 
 def get_training_responses(model:Reconstructed, times:np.ndarray, p:int, u:float):
     """
     Recover responses that were used as input to reconstruct the model.
-    We assume SINGLE valued outputs and SINGLE control (i.e., m=1 and r=1).
+    We assume $m$-dimensional outputs and SINGLE control (i.e., r=1).
     :param model: the model represented by the data type of Reconstructed
     :param times: (np.array) the time integration
     :param p: (int) maximum number of time steps to keep the field on
@@ -216,7 +245,7 @@ def get_training_responses(model:Reconstructed, times:np.ndarray, p:int, u:float
         ################################################################################################################
 
         responses.append(
-            np.array(x) @ model.C[0]
+            model.C @ np.array(x).T
         )
 
     return np.array(responses)
