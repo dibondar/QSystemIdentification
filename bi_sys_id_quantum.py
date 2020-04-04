@@ -56,9 +56,14 @@ Reconstructed = namedtuple('Reconstructed', ['Ac', 'C', 'Nc', 'x0'])
 def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v, rank:int=None):
     """
     Perform the bilinear system identification from a series of $m$-dimensional outputs
-    under $r$ control
+    under $r$ control.
 
-    :param orig_responces: numpy.array of dimension (r, number of time steps).
+    :param orig_responces:  numpy.array of observable data such that
+                            orig_responces.shape = (p, r, m, the length of time series),
+                            p -- the maximum duration of "on" pulse,
+                            r -- the number of controls,
+                            m -- the number of output.
+
     :param alpha: (int) the shape of the Hankel matrix
     :param dt: (float) time increment
     :param v: (list) the control values used to generate orig_responces
