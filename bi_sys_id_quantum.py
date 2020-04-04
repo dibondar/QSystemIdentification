@@ -32,7 +32,13 @@ def block_hankel(first_column, last_row):
 def estimate_rank(orig_responces, alpha, print_sigma=True):
     """
     Estimate the rank based on a series of $m$-dimensional outputs under $r$ control
-    :param orig_responces: numpy.array of dimension (r, number of time steps).
+
+    :param orig_responces:  numpy.array of observable data such that
+                            orig_responces.shape = (p, r, m, the length of time series),
+                            p -- the maximum duration of "on" pulse,
+                            r -- the number of controls,
+                            m -- the number of output.
+
     :param alpha: (int) the shape of the Hankel matrix
     :param print_sigma: boolean flag indicating whether to print the singular values
 
@@ -254,3 +260,34 @@ def get_training_responses(model:Reconstructed, times:np.ndarray, p:int, u:float
         )
 
     return np.array(responses)
+
+def get_coordinate_transformation(model1:Reconstructed, model2:Reconstructed, n:int):
+    """
+    Find the coordinate transformation matrix between the specified two models.
+    :param model1: of type Reconstructed
+    :param model2: of type Reconstructed
+    :param n: the length of the observability matrix
+    :return: numpy.array
+    """
+    # get the observability matrices
+    Q1 = []
+    Q2 = []
+
+    pow_Ac1 = np.eye(*model1.Ac.shape)
+    pow_Ac2 = np.eye(*model2.Ac.shape)
+
+    for _ in range(n):
+        Q1.append(
+            model1.C @ pow_Ac1
+        )
+        pow_Ac1 = pow_Ac1 @ model1.Ac
+
+        Q2.append(
+            model2.C @ pow_Ac2
+        )
+        pow_Ac2 = pow_Ac2 @ model2.Ac
+
+    Q1 = np.vstack(Q1)
+    Q2 = np.vstack(Q2)
+
+    return pinv(Q1) @ Q2
