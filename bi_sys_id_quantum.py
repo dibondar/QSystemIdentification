@@ -59,7 +59,7 @@ def estimate_rank(orig_responces, alpha, print_sigma=True):
 # return type for the following function
 Reconstructed = namedtuple('Reconstructed', ['Ac', 'C', 'Nc', 'x0'])
 
-def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v, rank:int=None):
+def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v, rank:int=None, enforce_orthogonal=False):
     """
     Perform the bilinear system identification from a series of $m$-dimensional outputs
     under $r$ control.
@@ -75,6 +75,8 @@ def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v, rank
     :param v: (list) the control values used to generate orig_responces
 
     :param rank: (int) rank to be used
+    :param enforce_orthogonal: (bool) A boolean flag indicated weather to enforce the orthogonality
+                            (i.e., unitarity) of dynamics.
 
     :return: Reconstructed
     """
@@ -108,10 +110,11 @@ def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v, rank
     U1_up = U1[:-m, ]
     U1_down = U1[m:, ]
 
-    Ac_reconstructed = (logm(
-        # orthogonal_procrustes(U1_up, U1_down)[0][:rank, :rank]
-        lstsq(U1_up, U1_down)[0][:rank, :rank]
-    ) / dt)
+    Ac_reconstructed = logm(
+        orthogonal_procrustes(U1_up, U1_down)[0][:rank, :rank]
+            if enforce_orthogonal
+        else lstsq(U1_up, U1_down)[0][:rank, :rank]
+    ) / dt
 
     # Calculate B1_bar as save it into the B_bar list
     B_bar = [
@@ -140,10 +143,14 @@ def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v, rank
     C_right = [c[:, 1:] for c in C]
     C_left = [c[:, :-1] for c in C]
 
-    A_bar = [
-        lstsq(left.T, right.T)[0].T for left, right in zip(C_left, C_right)
-        #orthogonal_procrustes(left.T, right.T)[0].T for left, right in zip(C_left, C_right)
-    ]
+    if enforce_orthogonal:
+        A_bar = [
+            orthogonal_procrustes(left.T, right.T)[0].T for left, right in zip(C_left, C_right)
+        ]
+    else:
+        A_bar = [
+            lstsq(left.T, right.T)[0].T for left, right in zip(C_left, C_right)
+        ]
 
     Nc_reconstructed = [
         (logm(a) / dt - Ac_reconstructed) / vi for a, vi in zip(A_bar, v)
