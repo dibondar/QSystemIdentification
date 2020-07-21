@@ -1,7 +1,8 @@
 import numpy as np
-from scipy.linalg import logm, svd, lstsq, pinv, orthogonal_procrustes
+from scipy.linalg import logm, svd, lstsq, pinv
 from scipy.integrate import ode
 from collections import namedtuple
+
 
 def block_hankel(first_column, last_row):
     """
@@ -11,7 +12,7 @@ def block_hankel(first_column, last_row):
     """
     blocks = [[]]
 
-    # fillup with the first_column values
+    # fill-up with the upper left triangular with first_column values
     for entry in first_column:
         for row in blocks:
             row.append(entry)
@@ -19,13 +20,12 @@ def block_hankel(first_column, last_row):
 
     blocks.pop()
 
-    # fillup with the last_row values
-    lower_triangle = blocks[1:]
+    # fill-up with the low right triangular with last_row values
+    for row in blocks:
+        row.extend(last_row[1:])
 
-    for entry in last_row[1:]:
-        for row in lower_triangle:
-            row.append(entry)
-        lower_triangle = lower_triangle[1:]
+    # trim the blocks such that it is a matrix
+    blocks = [row[:len(last_row)] for row in blocks]
 
     return np.block(blocks)
 
@@ -59,7 +59,7 @@ def estimate_rank(orig_responces, alpha, print_sigma=True):
 # return type for the following function
 Reconstructed = namedtuple('Reconstructed', ['Ac', 'C', 'Nc', 'x0'])
 
-def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v, rank:int=None, enforce_orthogonal=False):
+def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v, rank:int=None):
     """
     Perform the bilinear system identification from a series of $m$-dimensional outputs
     under $r$ control.
@@ -75,8 +75,6 @@ def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v, rank
     :param v: (list) the control values used to generate orig_responces
 
     :param rank: (int) rank to be used
-    :param enforce_orthogonal: (bool) A boolean flag indicated weather to enforce the orthogonality
-                            (i.e., unitarity) of dynamics.
 
     :return: Reconstructed
     """
@@ -111,9 +109,7 @@ def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v, rank
     U1_down = U1[m:, ]
 
     Ac_reconstructed = logm(
-        orthogonal_procrustes(U1_up, U1_down)[0][:rank, :rank]
-            if enforce_orthogonal
-        else lstsq(U1_up, U1_down)[0][:rank, :rank]
+        lstsq(U1_up, U1_down)[0][:rank, :rank]
     ) / dt
 
     # Calculate B1_bar as save it into the B_bar list
@@ -143,14 +139,10 @@ def bi_sys_id_my_version(orig_responces:np.ndarray, alpha:int, dt:float, v, rank
     C_right = [c[:, 1:] for c in C]
     C_left = [c[:, :-1] for c in C]
 
-    if enforce_orthogonal:
-        A_bar = [
-            orthogonal_procrustes(left.T, right.T)[0].T for left, right in zip(C_left, C_right)
-        ]
-    else:
-        A_bar = [
-            lstsq(left.T, right.T)[0].T for left, right in zip(C_left, C_right)
-        ]
+
+    A_bar = [
+        lstsq(left.T, right.T)[0].T for left, right in zip(C_left, C_right)
+    ]
 
     Nc_reconstructed = [
         (logm(a) / dt - Ac_reconstructed) / vi for a, vi in zip(A_bar, v)
